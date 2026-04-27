@@ -84,6 +84,11 @@ custom_components/hacs/
 .secrets/
 ANIO_API_DOCUMENTATION.md
 
+# Bridge runtime
+data/
+state.json
+.venv-test/
+
 # Local testing
 devcontainer/
 .devcontainer/local/
