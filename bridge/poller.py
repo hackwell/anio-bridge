@@ -15,6 +15,7 @@ from anio import (
 from anio.const import SENDER_DEVICE, SENDER_WATCH
 
 if TYPE_CHECKING:
+    from bridge.hermes_forwarder import HermesForwarder
     from telegram.bot import TelegramBot
     from whisper_transcribe import VoiceTranscriber
 
@@ -133,6 +134,20 @@ class AnioPoller:
     async def _forward_voice(self, data: dict[str, Any]) -> None:
         message_id = str(data.get("id") or "")
         prefix = f"📱 {self._device_name} [Sprachnachricht]"
+
+        # Wenn der Bot ein HermesForwarder ist, Audio-URL direkt übergeben
+        # damit Hermes selbst transkribiert
+        if hasattr(self._bot, "send_voice_event"):
+            audio_url = ""
+            for key in VOICE_URL_KEYS:
+                url = data.get(key)
+                if isinstance(url, str) and url.startswith(("http://", "https://")):
+                    audio_url = url
+                    break
+            await self._bot.send_voice_event(  # type: ignore[union-attr]
+                self._device_name, audio_url, message_id
+            )
+            return
 
         transcription = await self._try_transcribe(data, message_id)
         if transcription:

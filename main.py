@@ -20,6 +20,7 @@ from anio import (
     AnioMessageTooLongError,
 )
 from anio.const import MAX_CHAT_MESSAGE_LENGTH
+from bridge.hermes_forwarder import HermesForwarder
 from bridge.poller import AnioPoller
 from bridge.state import BridgeState
 from telegram.bot import TelegramBot
@@ -72,6 +73,9 @@ class Bridge:
             "yes",
             "on",
         )
+        # Hermes-Webhook-Modus: wenn gesetzt, wird kein Telegram-Bot verwendet
+        self.hermes_webhook_url = os.getenv("HERMES_WEBHOOK_URL") or None
+        self.hermes_webhook_secret = os.getenv("HERMES_WEBHOOK_SECRET", "")
 
         self.state = BridgeState.load(self.state_file)
         self.session: aiohttp.ClientSession | None = None
@@ -118,13 +122,22 @@ class Bridge:
             # Trigger lazy init so we log backend availability now.
             _ = self.transcriber.available
 
-        self.bot = TelegramBot(
-            session=self.session,
-            token=self.tg_token,
-            allowed_chat_id=self.tg_chat_id,
-            on_update=self._handle_telegram_message,
-            initial_offset=self.state.telegram_offset,
-        )
+        if self.hermes_webhook_url:
+            _LOGGER.info("Hermes-Webhook-Modus aktiv: %s", self.hermes_webhook_url)
+            self.bot = HermesForwarder(  # type: ignore[assignment]
+                session=self.session,
+                webhook_url=self.hermes_webhook_url,
+                webhook_secret=self.hermes_webhook_secret,
+                owner_chat_id=self.tg_chat_id,
+            )
+        else:
+            self.bot = TelegramBot(
+                session=self.session,
+                token=self.tg_token,
+                allowed_chat_id=self.tg_chat_id,
+                on_update=self._handle_telegram_message,
+                initial_offset=self.state.telegram_offset,
+            )
 
         self.poller = AnioPoller(
             client=self.client,
