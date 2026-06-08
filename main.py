@@ -78,6 +78,22 @@ class Bridge:
         self.hermes_webhook_secret = os.getenv("HERMES_WEBHOOK_SECRET", "")
 
         self.state = BridgeState.load(self.state_file)
+
+        # Fallback: Wenn state.json keine Tokens hat, aus Env-Variablen laden.
+        # Dies greift wenn das Docker-Volume leer ist (z.B. nach Neuanlage des Containers).
+        # Die Env-Variablen ANIO_REFRESH_TOKEN / ANIO_APP_UUID werden von Hermes
+        # nach erfolgreichem Login automatisch aktualisiert.
+        if not self.state.anio_refresh_token:
+            env_refresh = os.getenv("ANIO_REFRESH_TOKEN")
+            env_app_uuid = os.getenv("ANIO_APP_UUID")
+            if env_refresh:
+                _LOGGER.info(
+                    "Kein Token in state.json — lade Refresh-Token aus Env-Variable ANIO_REFRESH_TOKEN"
+                )
+                self.state.anio_refresh_token = env_refresh
+                if env_app_uuid:
+                    self.state.app_uuid = env_app_uuid
+
         self.session: aiohttp.ClientSession | None = None
         self.auth: AnioAuth | None = None
         self.client: AnioApiClient | None = None
@@ -94,6 +110,55 @@ class Bridge:
         if self.auth:
             self.state.app_uuid = self.auth.app_uuid
         await self.state.save()
+        # Refresh-Token auch in Coolify Env-Variable aktualisieren (Fallback für nächsten Neustart)
+        await self._update_coolify_refresh_token(refresh)
+
+    async def _update_coolify_refresh_token(self, refresh_token: str) -> None:
+        """Aktualisiert ANIO_REFRESH_TOKEN in Coolify Env-Variablen (bester-Effort)."""
+        coolify_api_url = os.getenv("COOLIFY_API_URL")
+        coolify_token = os.getenv("COOLIFY_API_TOKEN")
+        coolify_app_uuid = os.getenv("COOLIFY_APP_UUID")
+        if not (coolify_api_url and coolify_token and coolify_app_uuid):
+            return  # Coolify-Integration nicht konfiguriert
+        try:
+            assert self.session is not None
+            headers = {
+                "Authorization": f"Bearer {coolify_token}",
+                "Content-Type": "application/json",
+            }
+            # Bestehende Env-Variable finden
+            async with self.session.get(
+                f"{coolify_api_url}/api/v1/applications/{coolify_app_uuid}/envs",
+                headers=headers,
+            ) as resp:
+                if resp.status != 200:
+                    return
+                envs = await resp.json()
+
+            env_uuid = next(
+                (e["uuid"] for e in envs if e["key"] == "ANIO_REFRESH_TOKEN"),
+                None,
+            )
+            if env_uuid:
+                async with self.session.patch(
+                    f"{coolify_api_url}/api/v1/applications/{coolify_app_uuid}/envs/{env_uuid}",
+                    headers=headers,
+                    json={"key": "ANIO_REFRESH_TOKEN", "value": refresh_token},
+                ) as resp:
+                    if resp.status == 200:
+                        _LOGGER.debug("ANIO_REFRESH_TOKEN in Coolify aktualisiert")
+                    else:
+                        _LOGGER.warning("Coolify Env-Update fehlgeschlagen: %d", resp.status)
+            else:
+                async with self.session.post(
+                    f"{coolify_api_url}/api/v1/applications/{coolify_app_uuid}/envs",
+                    headers=headers,
+                    json={"key": "ANIO_REFRESH_TOKEN", "value": refresh_token, "is_preview": False},
+                ) as resp:
+                    if resp.status == 201:
+                        _LOGGER.debug("ANIO_REFRESH_TOKEN in Coolify erstellt")
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.debug("Coolify Env-Update fehlgeschlagen (ignoriert): %s", err)
 
     async def setup(self) -> None:
         timeout = aiohttp.ClientTimeout(total=60)
