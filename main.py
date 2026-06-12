@@ -126,37 +126,22 @@ class Bridge:
                 "Authorization": f"Bearer {coolify_token}",
                 "Content-Type": "application/json",
             }
-            # Bestehende Env-Variable finden
-            async with self.session.get(
+            # Korrekte Methode: PATCH /applications/{uuid}/envs (ohne env_uuid im Pfad)
+            # Coolify erstellt oder aktualisiert anhand des Key-Namens automatisch.
+            async with self.session.patch(
                 f"{coolify_api_url}/api/v1/applications/{coolify_app_uuid}/envs",
                 headers=headers,
+                json={
+                    "key": "ANIO_REFRESH_TOKEN",
+                    "value": refresh_token,
+                    "is_preview": False,
+                    "is_buildtime": False,
+                },
             ) as resp:
-                if resp.status != 200:
-                    return
-                envs = await resp.json()
-
-            env_uuid = next(
-                (e["uuid"] for e in envs if e["key"] == "ANIO_REFRESH_TOKEN"),
-                None,
-            )
-            if env_uuid:
-                async with self.session.patch(
-                    f"{coolify_api_url}/api/v1/applications/{coolify_app_uuid}/envs/{env_uuid}",
-                    headers=headers,
-                    json={"key": "ANIO_REFRESH_TOKEN", "value": refresh_token},
-                ) as resp:
-                    if resp.status == 200:
-                        _LOGGER.debug("ANIO_REFRESH_TOKEN in Coolify aktualisiert")
-                    else:
-                        _LOGGER.warning("Coolify Env-Update fehlgeschlagen: %d", resp.status)
-            else:
-                async with self.session.post(
-                    f"{coolify_api_url}/api/v1/applications/{coolify_app_uuid}/envs",
-                    headers=headers,
-                    json={"key": "ANIO_REFRESH_TOKEN", "value": refresh_token, "is_preview": False},
-                ) as resp:
-                    if resp.status == 201:
-                        _LOGGER.debug("ANIO_REFRESH_TOKEN in Coolify erstellt")
+                if resp.status in (200, 201):
+                    _LOGGER.debug("ANIO_REFRESH_TOKEN in Coolify aktualisiert")
+                else:
+                    _LOGGER.warning("Coolify Env-Update fehlgeschlagen: %d", resp.status)
         except Exception as err:  # noqa: BLE001
             _LOGGER.debug("Coolify Env-Update fehlgeschlagen (ignoriert): %s", err)
 
